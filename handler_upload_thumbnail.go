@@ -37,7 +37,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
-		respondWithError(w, http.StatusNotFound, "Video not found", err)
+		respondWithError(w, http.StatusNotFound, "Video draft not found", err)
 		return
 	}
 	if video.UserID != userID {
@@ -60,13 +60,8 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	defer file.Close()
 
 	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to parse media type", err)
-		return
-	}
-
-	if mediaType != "image/jpeg" && mediaType != "image/png" {
-		respondWithError(w, http.StatusBadRequest, "Invalid media type", nil)
+	if err != nil || (mediaType != "image/jpeg" && mediaType != "image/png") {
+		respondWithError(w, http.StatusBadRequest, "Invalid file type, must be image/jpeg or image/png", err)
 		return
 	}
 
@@ -100,7 +95,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to update video", err)
+		respondWithError(w, http.StatusInternalServerError, "Failed to update thumbnail url", err)
 		return
 	}
 
