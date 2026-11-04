@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -59,6 +62,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
 	if err != nil || mediaType != "video/mp4" {
 		respondWithError(w, http.StatusBadRequest, "Invalid file type, must be video/mp4", err)
+		return
 	}
 
 	tempFile, err := os.CreateTemp("", "tubly-upload.mp4")
@@ -87,7 +91,25 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Failed to generate random bytes", err)
 		return
 	}
-	fileKey := hex.EncodeToString(randomBytes) + ".mp4"
+
+	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil || aspectRatio == "" {
+		respondWithError(w, http.StatusInternalServerError, "Failed to get vidoe's apsect ratio", err)
+		return
+	}
+
+	var prefix string
+
+	switch aspectRatio {
+	case "16:9":
+		prefix = "landscape"
+	case "9:16":
+		prefix = "portrait"
+	default:
+		prefix = "other"
+	}
+
+	fileKey := prefix + "/" + hex.EncodeToString(randomBytes) + ".mp4"
 
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
@@ -110,4 +132,43 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("Failed to run cmd: %v", err)
+	}
+
+	type parameters struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"streams"`
+	}
+
+	params := parameters{}
+
+	err = json.Unmarshal(out.Bytes(), &params)
+	if err != nil {
+		return "", fmt.Errorf("Failed to Unmarshal the cmd out: %v", err)
+	}
+
+	width := params.Streams[0].Width
+	height := params.Streams[0].Height
+
+	ratio := float64(width) / float64(height)
+
+	if ratio > 1.7 && ratio < 1.85 {
+		return "16:9", nil
+	}
+
+	if ratio > 0.5 && ratio < 0.6 {
+		return "9:16", nil
+	}
+
+	return "other", nil
 }
